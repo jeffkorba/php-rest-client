@@ -2,137 +2,165 @@
 class RestClient {
 
 	private $defaults = [
-		'options' => [
+		'url' => null,
+		'baseUrl' => null,
+		'method' => 'GET'
+		'headers' => [], // Content-Type: application/json || multipart/form-data || application/x-www-form-urlencoded || 'text/plain'
+		'data' => [],
+		'params' => [],
+		'authorization' => false,
+		'authentication' => false,
+		'credentials' => [
 			'username' => null,
-			'password' => null,
-			'timeout' => 60, // 0 === infinite
-			'responseType' => 'object', // object || array || json
-			'contentType' => 'application/json', // multipart/form-data
-			'authenticate' => false,
-			'baseUrl' => null
+			'password' => null
 		],
-		'headers' => [
-			'Content-Type: application/json'
-		]
+		'responseType' => 'array', // array || object
+		'responseEncoding' => 'utf8',
+		'maxRedirects' => 3,
+		'maxContentLength' => 2000,
+		'timeout' => 60 // 0 === infinite
 	];
 
-	public function __construct ($defaults = []) {
+	private $curl;
 
-		$this->setDefaults($defaults);
+	public function __construct ($config = []) {
+
+		$this->defaults = array_merge($this->defaults, $config);
+
+		$this->curl = curl_init();
 	}
 
-	public function setDefaults ($defaults) {
+	public function setOption($option, $value) {
 
-		if (isset($defaults['options'])) {
+		if (isset($this->default[$option])) {
 
-			$this->setOptions($defaults['options']);
-		}
-
-		if (isset($defaults['headers'])) {
-
-			$this->setHeaders($defaults['headers']);
+			$this->default[$option] = $value;
 		}
 	}
 
-	public function setOptions ($options) {
+	public function setHeader ($header, $value) {
 
-		$this->defaults['options'] = array_merge($this->defaults['options'], $options);
+		$this->default['headers'][$header] = $value;
+
+		return $this;
 	}
 
 	public function setHeaders ($headers) {
 
-		$this->defaults['headers'] = $headers;
+		$this->default['headers'] = $headers;
+
+		return $this;
 	}
 
-	public function setCredentials ($username, $password) {
+	private function formatHeaders ($headers) {
 
-		$this->defaults['options']['username'] = $username;
-		$this->defaults['options']['password'] = $password;
+		$formattedHeaders = [];
+
+		foreach ($headers as $key => $value) {
+
+			$formattedHeaders[] = $key . ': ' . $value;
+		}
+
+		return $formattedHeaders;
 	}
 
-	private function execute ($method, $uri, $data, $config) {
+	private function formatResponse ($response, $type) {
+
+		if ($type === 'array') {
+
+			return json_decode($response, true);
+		}
+		else if ($type === 'object') {
+
+			return json_decode($response);
+		}
+		else {
+
+			return $response;
+		}
+	}
+
+	public function get ($url, $config = []) {
+
+		return $this->execute('get', $url, $data = [], $config);
+	}
+
+	public function post ($url, $data = [], $config = []) {
+
+		$config['headers']['Content-Type'] = 'multipart/form-data'; // default
+
+		return $this->execute('post', $url, $data, $config);
+	}
+
+	public function put ($url, $data = [], $config = []) {
+
+		$config['headers']['Content-Type'] = 'application/x-www-form-urlencoded'; // default
+
+		return $this->execute('put', $url, $data, $config);
+	}
+
+	public function patch ($url, $data = [], $config = []) {
+
+		$config['headers']['Content-Type'] = 'application/x-www-form-urlencoded'; // default
+
+		return $this->execute('patch', $url, $data, $config);
+	}
+
+	public function delete ($url, $config = []) {
+
+		return $this->execute('delete', $url, $data = [], $config);
+	}
+
+	private function execute ($method, $url, $data, $config) {
 
 		$config = array_merge($this->defaults, $config);
 
-		$curl = curl_init();
+		$options = [
+			CURLOPT_CUSTOMREQUEST => $method,
+			CURLOPT_URL => empty($config['baseUrl']) ? $url : $config['baseUrl'] . $url,
+			CURLOPT_HTTPHEADER => $this->formatHeaders($config['headers']),
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_TIMEOUT => $config['timeout']
+		];
 
-		if ($method === 'put' || $method === 'patch' || $method === 'delete') {
+		if ($config['maxRedirects'] > 0) {
 
-			$options[CURLOPT_CUSTOMREQUEST] = $method;
+			$options[CURLOPT_FOLLOWLOCATION] = true;
+			$options[CURLOPT_MAXREDIRS] = $config['maxRedirects'];
 		}
 
-		if ($method === 'post' || $method === 'put' || $method === 'patch') {
+		if ($config['authentication'] && !empty($config['credentials']['username']) && !empty($config['credentials']['password'])) {
 
-			if ($method === 'post') {
+			$options[CURLOPT_USERPWD] = $config['credentials']['username'] . ':' . $config['credentials']['password'];
+		}
 
-				$options[CURLOPT_POST] = true;
+		if (!empty($data)) {
+
+			if ($config['headers']['Content-Type'] === 'application/json') {
+
+				$options[CURLOPT_POSTFIELDS] = json_encode($data);
 			}
+			else if ($config['headers']['Content-Type'] === 'application/x-www-form-urlencoded') {
 
-			if (!empty($data)) {
+				$options[CURLOPT_POSTFIELDS] = http_build_query($data);
+			}
+			else {
 
-				if ($config['options']['contentType'] === 'application/json') {
-
-					$options[CURLOPT_POSTFIELDS] = json_encode($data);
-				}
-				else {
-	
-					$options[CURLOPT_POSTFIELDS] = $data;
-				}
+				$options[CURLOPT_POSTFIELDS] = $data;
 			}
 		}
-
-		if ($config['options']['authenticate'] && !empty($config['options']['username']) && !empty($config['options']['password'])) {
-
-			$options[CURLOPT_USERPWD] = $config['options']['username'] . ':' . $config['options']['password'];
-		}
-
-		$options[CURLOPT_URL] = empty($config['options']['baseUrl']) ? $uri : $config['options']['baseUrl'] . $uri;
-		$options[CURLOPT_HTTPHEADER] = $config['headers'];
-		$options[CURLOPT_RETURNTRANSFER] = true;
-		$options[CURLOPT_TIMEOUT] = $config['options']['timeout'];
 
 		curl_setopt_array($curl, $options);
 
-		$response = curl_exec($curl);
+		$response = curl_exec($this->curl);
 
-		//var_dump($response);
+		$this->close();
 
-		curl_close($curl);
-
-		if ($config['options']['responseType'] === 'object') {
-
-			$response = json_decode($response);
-		}
-		else if ($config['options']['responseType'] === 'array') {
-
-			$response = json_decode($response, true);
-		}
-
-		return $response;
+		return $this->formatResponse($response, $config['responseType']);
 	}
 
-	public function get ($uri, $data = [], $config = []) {
+	private function close () {
 
-		return $this->execute('get', $uri, $data, $config);
-	}
-
-	public function post ($uri, $data = [], $config = []) {
-
-		return $this->execute('post', $uri, $data, $config);
-	}
-
-	public function put ($uri, $data = [], $config = []) {
-
-		return $this->execute('put', $uri, $data, $config);
-	}
-
-	public function patch ($uri, $data = [], $config = []) {
-
-		return $this->execute('patch', $uri, $data, $config);
-	}
-
-	public function delete ($uri, $data = [], $config = []) {
-
-		return $this->execute('delete', $uri, $data, $config);
+		curl_close($this->curl);
 	}
 }
